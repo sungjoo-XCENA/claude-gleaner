@@ -82,6 +82,35 @@ python3 server.py --host 127.0.0.1  # localhost only
 - Alerts refresh every 30 seconds
 - Active tab preserved across page refreshes
 
+## Compatibility
+
+Claude Gleaner reads from the `~/.claude/` directory created by **Claude Code** (CLI and IDE extensions). It does **not** work with Claude Desktop app (different data structure).
+
+### Supported Claude Code environments
+
+| Environment | `.claude/` location | Gleaner works? |
+|-------------|---------------------|----------------|
+| Linux / macOS CLI | `/home/<user>/.claude/` | ✅ |
+| Windows CLI (npm install) | `C:\Users\<user>\.claude\` | ✅ |
+| Windows WSL | `/home/<user>/.claude/` (inside WSL) | ✅ Run Gleaner inside WSL |
+| VS Code extension | Same as CLI (per OS) | ✅ |
+| JetBrains extension | Same as CLI (per OS) | ✅ |
+| Claude Desktop app | Different structure | ❌ Not supported |
+
+### How to verify
+
+Check if `~/.claude/` exists:
+
+```bash
+# Linux / macOS / WSL
+ls ~/.claude/
+
+# Windows PowerShell
+dir $HOME\.claude\
+```
+
+If the directory exists with `settings.json`, `projects/`, `sessions/` inside, Gleaner will pick it up.
+
 ## Network Access
 
 ```
