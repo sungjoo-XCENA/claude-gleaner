@@ -12,7 +12,7 @@ import socket
 import subprocess
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any, Optional
@@ -1786,6 +1786,615 @@ def get_alerts() -> dict:
     return {"alerts": alerts, "summary": summary}
 
 
+# ─── Token Usage (ported from codeburn) ───────────────────────────────────────
+
+FALLBACK_PRICING: dict[str, dict] = {
+    "claude-opus-4-6": {"input": 5e-6, "output": 25e-6, "cache_write": 6.25e-6, "cache_read": 0.5e-6, "web_search": 0.01, "fast_mult": 6},
+    "claude-opus-4-5": {"input": 5e-6, "output": 25e-6, "cache_write": 6.25e-6, "cache_read": 0.5e-6, "web_search": 0.01, "fast_mult": 1},
+    "claude-opus-4-1": {"input": 15e-6, "output": 75e-6, "cache_write": 18.75e-6, "cache_read": 1.5e-6, "web_search": 0.01, "fast_mult": 1},
+    "claude-opus-4": {"input": 15e-6, "output": 75e-6, "cache_write": 18.75e-6, "cache_read": 1.5e-6, "web_search": 0.01, "fast_mult": 1},
+    "claude-sonnet-4-6": {"input": 3e-6, "output": 15e-6, "cache_write": 3.75e-6, "cache_read": 0.3e-6, "web_search": 0.01, "fast_mult": 1},
+    "claude-sonnet-4-5": {"input": 3e-6, "output": 15e-6, "cache_write": 3.75e-6, "cache_read": 0.3e-6, "web_search": 0.01, "fast_mult": 1},
+    "claude-sonnet-4": {"input": 3e-6, "output": 15e-6, "cache_write": 3.75e-6, "cache_read": 0.3e-6, "web_search": 0.01, "fast_mult": 1},
+    "claude-3-7-sonnet": {"input": 3e-6, "output": 15e-6, "cache_write": 3.75e-6, "cache_read": 0.3e-6, "web_search": 0.01, "fast_mult": 1},
+    "claude-3-5-sonnet": {"input": 3e-6, "output": 15e-6, "cache_write": 3.75e-6, "cache_read": 0.3e-6, "web_search": 0.01, "fast_mult": 1},
+    "claude-haiku-4-5": {"input": 1e-6, "output": 5e-6, "cache_write": 1.25e-6, "cache_read": 0.1e-6, "web_search": 0.01, "fast_mult": 1},
+    "claude-3-5-haiku": {"input": 0.8e-6, "output": 4e-6, "cache_write": 1e-6, "cache_read": 0.08e-6, "web_search": 0.01, "fast_mult": 1},
+}
+
+_SHORT_MODEL_NAMES: dict[str, str] = {
+    "claude-opus-4-6": "Opus 4.6",
+    "claude-opus-4-5": "Opus 4.5",
+    "claude-opus-4-1": "Opus 4.1",
+    "claude-opus-4": "Opus 4",
+    "claude-sonnet-4-6": "Sonnet 4.6",
+    "claude-sonnet-4-5": "Sonnet 4.5",
+    "claude-sonnet-4": "Sonnet 4",
+    "claude-3-7-sonnet": "Sonnet 3.7",
+    "claude-3-5-sonnet": "Sonnet 3.5",
+    "claude-haiku-4-5": "Haiku 4.5",
+    "claude-3-5-haiku": "Haiku 3.5",
+}
+
+# Classifier regex patterns (ported from codeburn classifier.ts)
+_RE_TEST = re.compile(r"\b(test|pytest|vitest|jest|mocha|spec|coverage|npm\s+test|npx\s+vitest|npx\s+jest)\b", re.I)
+_RE_GIT = re.compile(r"\bgit\s+(push|pull|commit|merge|rebase|checkout|branch|stash|log|diff|status|add|reset|cherry-pick|tag)\b", re.I)
+_RE_BUILD = re.compile(r"\b(npm\s+run\s+build|npm\s+publish|pip\s+install|docker|deploy|make\s+build|npm\s+run\s+dev|npm\s+start|pm2|systemctl|brew|cargo\s+build)\b", re.I)
+_RE_INSTALL = re.compile(r"\b(npm\s+install|pip\s+install|brew\s+install|apt\s+install|cargo\s+add)\b", re.I)
+_RE_DEBUG = re.compile(r"\b(fix|bug|error|broken|failing|crash|issue|debug|traceback|exception|stack\s*trace|not\s+working|wrong|unexpected|status\s+code|404|500|401|403)\b", re.I)
+_RE_FEATURE = re.compile(r"\b(add|create|implement|new|build|feature|introduce|set\s*up|scaffold|generate|make\s+(?:a|me|the)|write\s+(?:a|me|the))\b", re.I)
+_RE_REFACTOR = re.compile(r"\b(refactor|clean\s*up|rename|reorganize|simplify|extract|restructure|move|migrate|split)\b", re.I)
+_RE_BRAINSTORM = re.compile(r"\b(brainstorm|idea|what\s+if|explore|think\s+about|approach|strategy|design|consider|how\s+should|what\s+would|opinion|suggest|recommend)\b", re.I)
+_RE_RESEARCH = re.compile(r"\b(research|investigate|look\s+into|find\s+out|check|search|analyze|review|understand|explain|how\s+does|what\s+is|show\s+me|list|compare)\b", re.I)
+_RE_FILE = re.compile(r"\.(py|js|ts|tsx|jsx|json|yaml|yml|toml|sql|sh|go|rs|java|rb|php|css|html|md|csv|xml)\b", re.I)
+_RE_SCRIPT = re.compile(r"\b(run\s+\S+\.\w+|execute|scrip?t|curl|api\s+\S+|endpoint|request\s+url|fetch\s+\S+|query|database|db\s+\S+)\b", re.I)
+_RE_URL = re.compile(r"https?://\S+", re.I)
+
+_EDIT_TOOLS = {"Edit", "Write", "FileEditTool", "FileWriteTool", "NotebookEdit", "cursor:edit"}
+_READ_TOOLS = {"Read", "Grep", "Glob", "FileReadTool", "GrepTool", "GlobTool"}
+_BASH_TOOLS = {"Bash", "BashTool", "PowerShellTool"}
+_TASK_TOOLS = {"TaskCreate", "TaskUpdate", "TaskGet", "TaskList", "TaskOutput", "TaskStop", "TodoWrite"}
+_SEARCH_TOOLS = {"WebSearch", "WebFetch", "ToolSearch"}
+
+_CATEGORY_LABELS: dict[str, str] = {
+    "coding": "Coding",
+    "debugging": "Debugging",
+    "feature": "Feature Dev",
+    "refactoring": "Refactoring",
+    "testing": "Testing",
+    "exploration": "Exploration",
+    "planning": "Planning",
+    "delegation": "Delegation",
+    "git": "Git Ops",
+    "build/deploy": "Build/Deploy",
+    "conversation": "Conversation",
+    "brainstorming": "Brainstorming",
+    "general": "General",
+}
+
+
+def _get_model_costs(model: str) -> Optional[dict]:
+    """Strip date suffix and match against FALLBACK_PRICING with prefix matching."""
+    canonical = re.sub(r"-\d{8}$", "", model)
+    # Exact match
+    if canonical in FALLBACK_PRICING:
+        return FALLBACK_PRICING[canonical]
+    # Prefix match
+    for key, costs in FALLBACK_PRICING.items():
+        if canonical.startswith(key + "-") or canonical == key:
+            return costs
+    for key, costs in FALLBACK_PRICING.items():
+        if canonical.startswith(key):
+            return costs
+    return None
+
+
+def _calculate_cost(model: str, input_tokens: int, output_tokens: int,
+                    cache_creation: int, cache_read: int,
+                    web_search_requests: int, speed: str = "standard") -> float:
+    """Calculate USD cost for a single API call."""
+    costs = _get_model_costs(model)
+    if not costs:
+        return 0.0
+    mult = costs["fast_mult"] if speed == "fast" else 1
+    return mult * (
+        input_tokens * costs["input"]
+        + output_tokens * costs["output"]
+        + cache_creation * costs["cache_write"]
+        + cache_read * costs["cache_read"]
+        + web_search_requests * costs["web_search"]
+    )
+
+
+def _get_short_model_name(model: str) -> str:
+    """Map full model name to display name like 'Opus 4.6'."""
+    canonical = re.sub(r"-\d{8}$", "", model)
+    for key, name in _SHORT_MODEL_NAMES.items():
+        if canonical.startswith(key):
+            return name
+    return canonical
+
+
+def _classify_by_tools(tools: list[str], user_msg: str,
+                       has_plan_mode: bool, has_agent_spawn: bool) -> Optional[str]:
+    """Classify a turn by its tool usage pattern."""
+    if not tools:
+        return None
+    if has_plan_mode:
+        return "planning"
+    if has_agent_spawn:
+        return "delegation"
+
+    has_edits = bool(set(tools) & _EDIT_TOOLS)
+    has_reads = bool(set(tools) & _READ_TOOLS)
+    has_bash = bool(set(tools) & _BASH_TOOLS)
+    has_tasks = bool(set(tools) & _TASK_TOOLS)
+    has_search = bool(set(tools) & _SEARCH_TOOLS)
+    has_mcp = any(t.startswith("mcp__") for t in tools)
+    has_skill = "Skill" in tools
+
+    if has_bash and not has_edits:
+        if _RE_TEST.search(user_msg):
+            return "testing"
+        if _RE_GIT.search(user_msg):
+            return "git"
+        if _RE_BUILD.search(user_msg) or _RE_INSTALL.search(user_msg):
+            return "build/deploy"
+
+    if has_edits:
+        return "coding"
+    if has_bash and has_reads:
+        return "exploration"
+    if has_bash:
+        return "coding"
+    if has_search or has_mcp:
+        return "exploration"
+    if has_reads and not has_edits:
+        return "exploration"
+    if has_tasks and not has_edits:
+        return "planning"
+    if has_skill:
+        return "general"
+    return None
+
+
+def _refine_by_keywords(category: str, user_msg: str) -> str:
+    """Refine tool-based category with keyword analysis."""
+    if category == "coding":
+        if _RE_DEBUG.search(user_msg):
+            return "debugging"
+        if _RE_REFACTOR.search(user_msg):
+            return "refactoring"
+        if _RE_FEATURE.search(user_msg):
+            return "feature"
+        return "coding"
+    if category == "exploration":
+        if _RE_RESEARCH.search(user_msg):
+            return "exploration"
+        if _RE_DEBUG.search(user_msg):
+            return "debugging"
+        return "exploration"
+    return category
+
+
+def _classify_conversation(user_msg: str) -> str:
+    """Classify a turn with no tools by keyword analysis."""
+    if _RE_BRAINSTORM.search(user_msg):
+        return "brainstorming"
+    if _RE_RESEARCH.search(user_msg):
+        return "exploration"
+    if _RE_DEBUG.search(user_msg):
+        return "debugging"
+    if _RE_FEATURE.search(user_msg):
+        return "feature"
+    if _RE_FILE.search(user_msg):
+        return "coding"
+    if _RE_SCRIPT.search(user_msg):
+        return "coding"
+    if _RE_URL.search(user_msg):
+        return "exploration"
+    return "conversation"
+
+
+def _classify_turn(user_msg: str, tools: list[str],
+                   has_plan_mode: bool = False, has_agent_spawn: bool = False) -> str:
+    """Classify a turn into one of 13 categories."""
+    if not tools:
+        return _classify_conversation(user_msg)
+    tool_cat = _classify_by_tools(tools, user_msg, has_plan_mode, has_agent_spawn)
+    if tool_cat:
+        return _refine_by_keywords(tool_cat, user_msg)
+    return _classify_conversation(user_msg)
+
+
+def _count_retries(tool_sequence: list[str]) -> int:
+    """Count edit→bash→edit retry cycles in a tool sequence."""
+    saw_edit_before_bash = False
+    saw_bash_after_edit = False
+    retries = 0
+    for t in tool_sequence:
+        is_edit = t in _EDIT_TOOLS
+        is_bash = t in _BASH_TOOLS
+        if is_edit:
+            if saw_bash_after_edit:
+                retries += 1
+            saw_edit_before_bash = True
+            saw_bash_after_edit = False
+        if is_bash and saw_edit_before_bash:
+            saw_bash_after_edit = True
+    return retries
+
+
+def _extract_bash_commands(command: str) -> list[str]:
+    """Extract top-level command names from a bash command string."""
+    if not command or not command.strip():
+        return []
+    # Strip quoted strings to avoid splitting on separators inside quotes
+    stripped = re.sub(r'"[^"]*"|\'[^\']*\'', lambda m: " " * len(m.group()), command)
+    # Find separator positions
+    parts = []
+    cursor = 0
+    for m in re.finditer(r"\s*(?:&&|;|\|)\s*", stripped):
+        parts.append((cursor, m.start()))
+        cursor = m.end()
+    parts.append((cursor, len(command)))
+
+    cmds = []
+    for start, end in parts:
+        segment = command[start:end].strip()
+        if not segment:
+            continue
+        first_token = segment.split()[0]
+        base = os.path.basename(first_token)
+        if base and base != "cd":
+            cmds.append(base)
+    return cmds
+
+
+# Cache for token usage results
+_token_cache: dict = {}
+_TOKEN_CACHE_TTL = 60
+
+
+def _parse_token_usage(period: str) -> dict:
+    """Parse JSONL files and aggregate token usage data."""
+    now = datetime.now()
+    if period == "today":
+        period_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    else:
+        period_start = now - timedelta(days=7)
+    period_end = now
+
+    period_start_ts = period_start.timestamp()
+
+    projects_dir = CLAUDE_DIR / "projects"
+    if not projects_dir.is_dir():
+        return _empty_token_response(period)
+
+    # Aggregation accumulators
+    seen_ids: set[str] = set()
+    total_cost = 0.0
+    total_calls = 0
+    total_input = 0
+    total_output = 0
+    total_cache_read = 0
+    total_cache_write = 0
+    session_ids: set[str] = set()
+
+    daily_map: dict[str, dict] = {}       # date_str -> {costUSD, calls}
+    project_map: dict[str, dict] = {}     # project_name -> {costUSD, sessions: set}
+    model_map: dict[str, dict] = {}       # short_name -> {costUSD, calls}
+    activity_map: dict[str, dict] = {}    # category -> {costUSD, turns, retries, editTurns, oneShotTurns}
+    core_tools_map: dict[str, int] = {}
+    shell_cmds_map: dict[str, int] = {}
+    mcp_servers_map: dict[str, int] = {}
+
+    for proj_dir in projects_dir.iterdir():
+        if not proj_dir.is_dir():
+            continue
+
+        project_name = Path(decode_project_path(proj_dir.name)).name or proj_dir.name
+
+        for jsonl_file in proj_dir.glob("*.jsonl"):
+            if "subagent" in jsonl_file.name:
+                continue
+
+            # Optimization: skip files not modified since period start (for "today")
+            if period == "today":
+                try:
+                    if os.path.getmtime(jsonl_file) < period_start_ts:
+                        continue
+                except OSError:
+                    continue
+
+            try:
+                with open(jsonl_file, "r", encoding="utf-8", errors="replace") as f:
+                    raw_lines = f.readlines()
+            except (FileNotFoundError, PermissionError, OSError):
+                continue
+
+            session_id = jsonl_file.stem
+
+            # Parse entries
+            entries: list[dict] = []
+            for raw in raw_lines:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    entries.append(json.loads(raw))
+                except json.JSONDecodeError:
+                    continue
+
+            if not entries:
+                continue
+
+            # Group into turns: user message + following assistant calls
+            current_user_msg = ""
+            current_calls: list[dict] = []  # list of parsed assistant call dicts
+            current_tools: list[str] = []   # flat tool sequence for retry counting
+
+            def _flush_turn():
+                nonlocal total_cost, total_calls, total_input, total_output
+                nonlocal total_cache_read, total_cache_write, current_user_msg
+                nonlocal current_calls, current_tools
+
+                if not current_calls:
+                    current_user_msg = ""
+                    current_calls = []
+                    current_tools = []
+                    return
+
+                # Classify the turn
+                all_tools = []
+                has_plan = False
+                has_agent = False
+                for c in current_calls:
+                    all_tools.extend(c["tools"])
+                    if "EnterPlanMode" in c["tools"]:
+                        has_plan = True
+                    if "Agent" in c["tools"]:
+                        has_agent = True
+
+                category = _classify_turn(current_user_msg, all_tools, has_plan, has_agent)
+                retries = _count_retries(current_tools)
+                has_edits = bool(set(all_tools) & _EDIT_TOOLS)
+
+                turn_cost = sum(c["cost"] for c in current_calls)
+
+                # Activity aggregation
+                cat_slot = activity_map.setdefault(category, {
+                    "costUSD": 0.0, "turns": 0, "retries": 0,
+                    "editTurns": 0, "oneShotTurns": 0,
+                })
+                cat_slot["turns"] += 1
+                cat_slot["costUSD"] += turn_cost
+                if has_edits:
+                    cat_slot["editTurns"] += 1
+                    cat_slot["retries"] += retries
+                    if retries == 0:
+                        cat_slot["oneShotTurns"] += 1
+
+                current_user_msg = ""
+                current_calls = []
+                current_tools = []
+
+            for entry in entries:
+                etype = entry.get("type")
+
+                if etype == "user":
+                    # Flush previous turn
+                    _flush_turn()
+                    # Extract user message text
+                    msg = entry.get("message", {})
+                    if isinstance(msg, dict):
+                        content = msg.get("content", "")
+                    else:
+                        content = ""
+                    if isinstance(content, str):
+                        current_user_msg = content
+                    elif isinstance(content, list):
+                        texts = []
+                        for block in content:
+                            if isinstance(block, dict) and block.get("type") == "text":
+                                texts.append(block.get("text", ""))
+                            elif isinstance(block, str):
+                                texts.append(block)
+                        current_user_msg = " ".join(texts)
+
+                elif etype == "assistant":
+                    msg = entry.get("message")
+                    if not isinstance(msg, dict):
+                        continue
+                    usage = msg.get("usage")
+                    model = msg.get("model")
+                    if not usage or not model:
+                        continue
+
+                    # Deduplicate by message id
+                    msg_id = msg.get("id")
+                    if msg_id:
+                        if msg_id in seen_ids:
+                            continue
+                        seen_ids.add(msg_id)
+
+                    # Filter by timestamp
+                    ts_str = entry.get("timestamp", "")
+                    if ts_str:
+                        try:
+                            ts_dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                            # Make naive for comparison
+                            ts_naive = ts_dt.replace(tzinfo=None)
+                            if ts_naive < period_start or ts_naive > period_end:
+                                continue
+                        except (ValueError, TypeError):
+                            continue
+                    else:
+                        continue
+
+                    input_tokens = usage.get("input_tokens", 0)
+                    output_tokens = usage.get("output_tokens", 0)
+                    cache_creation = usage.get("cache_creation_input_tokens", 0)
+                    cache_read_tokens = usage.get("cache_read_input_tokens", 0)
+                    web_search_reqs = 0
+                    server_tool_use = usage.get("server_tool_use")
+                    if isinstance(server_tool_use, dict):
+                        web_search_reqs = server_tool_use.get("web_search_requests", 0)
+                    speed = usage.get("speed", "standard")
+
+                    cost = _calculate_cost(model, input_tokens, output_tokens,
+                                           cache_creation, cache_read_tokens,
+                                           web_search_reqs, speed)
+
+                    # Extract tool names from content blocks
+                    tools: list[str] = []
+                    bash_cmds: list[str] = []
+                    msg_content = msg.get("content", [])
+                    if isinstance(msg_content, list):
+                        for block in msg_content:
+                            if isinstance(block, dict) and block.get("type") == "tool_use":
+                                tool_name = block.get("name", "")
+                                if tool_name:
+                                    tools.append(tool_name)
+                                    # Extract bash commands
+                                    if tool_name in _BASH_TOOLS:
+                                        cmd = (block.get("input") or {}).get("command", "")
+                                        if isinstance(cmd, str):
+                                            bash_cmds.extend(_extract_bash_commands(cmd))
+
+                    # Accumulate totals
+                    total_cost += cost
+                    total_calls += 1
+                    total_input += input_tokens
+                    total_output += output_tokens
+                    total_cache_read += cache_read_tokens
+                    total_cache_write += cache_creation
+                    session_ids.add(session_id)
+
+                    # Daily
+                    date_str = ts_naive.strftime("%Y-%m-%d")
+                    day_slot = daily_map.setdefault(date_str, {"costUSD": 0.0, "calls": 0})
+                    day_slot["costUSD"] += cost
+                    day_slot["calls"] += 1
+
+                    # Project
+                    proj_slot = project_map.setdefault(project_name, {"costUSD": 0.0, "sessions": set()})
+                    proj_slot["costUSD"] += cost
+                    proj_slot["sessions"].add(session_id)
+
+                    # Model
+                    short_name = _get_short_model_name(model)
+                    model_slot = model_map.setdefault(short_name, {"costUSD": 0.0, "calls": 0})
+                    model_slot["costUSD"] += cost
+                    model_slot["calls"] += 1
+
+                    # Core tools
+                    for t in tools:
+                        if t.startswith("mcp__"):
+                            # MCP server
+                            parts = t.split("__")
+                            if len(parts) >= 2:
+                                server_name = parts[1]
+                                mcp_servers_map[server_name] = mcp_servers_map.get(server_name, 0) + 1
+                        else:
+                            core_tools_map[t] = core_tools_map.get(t, 0) + 1
+
+                    # Shell commands
+                    for cmd in bash_cmds:
+                        shell_cmds_map[cmd] = shell_cmds_map.get(cmd, 0) + 1
+
+                    # Store for turn grouping
+                    current_calls.append({"cost": cost, "tools": tools})
+                    current_tools.extend(tools)
+
+            # Flush last turn
+            _flush_turn()
+
+    # Build response
+    total_cache_total = total_cache_read + total_cache_write + total_input
+    cache_hit_pct = round(total_cache_read / total_cache_total * 100, 1) if total_cache_total > 0 else 0.0
+
+    overview = {
+        "totalCostUSD": round(total_cost, 4),
+        "totalCalls": total_calls,
+        "totalSessions": len(session_ids),
+        "totalInputTokens": total_input,
+        "totalOutputTokens": total_output,
+        "totalCacheReadTokens": total_cache_read,
+        "totalCacheWriteTokens": total_cache_write,
+        "cacheHitPct": cache_hit_pct,
+    }
+
+    daily = sorted(
+        [{"date": d, "costUSD": round(v["costUSD"], 4), "calls": v["calls"]}
+         for d, v in daily_map.items()],
+        key=lambda x: x["date"],
+    )
+
+    by_project = sorted(
+        [{"name": name, "costUSD": round(v["costUSD"], 4), "sessions": len(v["sessions"])}
+         for name, v in project_map.items()],
+        key=lambda x: x["costUSD"], reverse=True,
+    )
+
+    by_model = sorted(
+        [{"name": name, "costUSD": round(v["costUSD"], 4), "calls": v["calls"]}
+         for name, v in model_map.items()],
+        key=lambda x: x["costUSD"], reverse=True,
+    )
+
+    by_activity = []
+    for cat, v in activity_map.items():
+        edit_turns = v["editTurns"]
+        one_shot = v["oneShotTurns"]
+        one_shot_pct = round(one_shot / edit_turns * 100, 1) if edit_turns > 0 else 0.0
+        by_activity.append({
+            "category": _CATEGORY_LABELS.get(cat, cat.title()),
+            "costUSD": round(v["costUSD"], 4),
+            "turns": v["turns"],
+            "oneShotPct": one_shot_pct,
+        })
+    by_activity.sort(key=lambda x: x["costUSD"], reverse=True)
+
+    core_tools = sorted(
+        [{"name": n, "calls": c} for n, c in core_tools_map.items()],
+        key=lambda x: x["calls"], reverse=True,
+    )
+
+    shell_commands = sorted(
+        [{"name": n, "calls": c} for n, c in shell_cmds_map.items()],
+        key=lambda x: x["calls"], reverse=True,
+    )
+
+    mcp_servers = sorted(
+        [{"name": n, "calls": c} for n, c in mcp_servers_map.items()],
+        key=lambda x: x["calls"], reverse=True,
+    )
+
+    return {
+        "period": period,
+        "overview": overview,
+        "daily": daily,
+        "byProject": by_project,
+        "byModel": by_model,
+        "byActivity": by_activity,
+        "coreTools": core_tools,
+        "shellCommands": shell_commands,
+        "mcpServers": mcp_servers,
+    }
+
+
+def _empty_token_response(period: str) -> dict:
+    """Return an empty token usage response."""
+    return {
+        "period": period,
+        "overview": {
+            "totalCostUSD": 0, "totalCalls": 0, "totalSessions": 0,
+            "totalInputTokens": 0, "totalOutputTokens": 0,
+            "totalCacheReadTokens": 0, "totalCacheWriteTokens": 0,
+            "cacheHitPct": 0,
+        },
+        "daily": [],
+        "byProject": [],
+        "byModel": [],
+        "byActivity": [],
+        "coreTools": [],
+        "shellCommands": [],
+        "mcpServers": [],
+    }
+
+
+def get_token_usage(period: str = "week") -> dict:
+    """Token usage API with in-memory caching."""
+    now = time.time()
+    cached = _token_cache.get(period)
+    if cached and now - cached["ts"] < _TOKEN_CACHE_TTL:
+        return cached["data"]
+    result = _parse_token_usage(period)
+    _token_cache[period] = {"data": result, "ts": now}
+    return result
+
+
 # ─── HTTP Handler ────────────────────────────────────────────────────────────
 
 # API router: path → handler mapping
@@ -1804,6 +2413,7 @@ API_ROUTES: dict[str, callable] = {
     "/api/project-status": get_project_status,
     "/api/session-detail": get_session_detail,
     "/api/alerts": get_alerts,
+    "/api/token-usage": get_token_usage,
 }
 
 
@@ -1819,6 +2429,14 @@ class GleanerHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/") or "/"
         query_params = parse_qs(parsed.query)
+
+        # API endpoint: token-usage (accepts period query parameter)
+        if path == "/api/token-usage":
+            period = query_params.get("period", ["week"])[0]
+            if period not in ("today", "week"):
+                period = "week"
+            self._json_response(get_token_usage(period))
+            return
 
         # API endpoint: session-search (requires query parameter)
         if path == "/api/session-search":

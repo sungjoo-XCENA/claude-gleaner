@@ -1019,6 +1019,160 @@ body {
     padding: 16px;
   }
 }
+
+/* ============================================================
+   TOKEN USAGE (BURN) PANEL
+   ============================================================ */
+.burn-period-toggle {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+}
+.burn-period-btn {
+  padding: 6px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card-bg);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  transition: background 150ms ease, color 150ms ease, border-color 150ms ease;
+}
+.burn-period-btn:hover {
+  border-color: var(--border-hover);
+  color: var(--text-primary);
+}
+.burn-period-btn.active {
+  background: rgba(59,130,246,0.12);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.burn-overview {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--card-pad);
+  margin-bottom: 16px;
+}
+.burn-overview-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 12px;
+}
+.burn-stats-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 28px;
+}
+.burn-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.burn-stat-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+.burn-stat-value.accent { color: var(--accent); }
+.burn-stat-label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.burn-panels {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--gap);
+}
+@media (max-width: 900px) {
+  .burn-panels { grid-template-columns: 1fr; }
+}
+
+.burn-panel {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--card-pad);
+}
+.burn-panel-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+.burn-panel-cols {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 6px;
+  padding: 0 2px;
+}
+.burn-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 12px;
+}
+.burn-bar-name {
+  min-width: 90px;
+  max-width: 140px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.burn-bar {
+  height: 16px;
+  background: var(--bg);
+  border-radius: 3px;
+  overflow: hidden;
+  flex: 1;
+  min-width: 60px;
+}
+.burn-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #1e3a5f 0%, #3b82f6 60%, #60a5fa 100%);
+  transition: width 300ms ease;
+}
+.burn-bar-values {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+  justify-content: flex-end;
+  min-width: 80px;
+}
+.burn-bar-val {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: right;
+  min-width: 36px;
+}
+.burn-bar-val.primary {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.burn-cat-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
 </style>
 </head>
 <body>
@@ -1069,6 +1223,11 @@ body {
     <div class="nav-item" data-tab="hooks" onclick="switchTab('hooks', this)">
       <span class="nav-icon">🪝</span>
       <span>Hooks</span>
+    </div>
+    <div class="nav-divider"></div>
+    <div class="nav-item" data-tab="tokens" onclick="switchTab('tokens', this)">
+      <span class="nav-icon">🔥</span>
+      <span>Token Usage</span>
     </div>
   </nav>
 
@@ -1124,9 +1283,17 @@ body {
 
     <!-- Draggable card grid (individual cards) -->
     <div class="overview-cards-grid" id="overviewCardsGrid">
+      <div class="card drag-card" draggable="true" data-card-id="burn-summary">
+        <span class="drag-handle">⠿</span>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <span style="font-size:14px;font-weight:600;color:var(--accent)">🔥 Token Usage</span>
+          <span style="font-size:11px;color:var(--accent);cursor:pointer;opacity:0.7;margin-right:18px" onclick="switchTab('tokens', document.querySelector('[data-tab=tokens]'))">View Details →</span>
+        </div>
+        <div id="burnSummary" style="font-size:12px;color:var(--text-secondary)">Loading...</div>
+      </div>
       <div class="card drag-card" draggable="true" data-card-id="sessions">
         <span class="drag-handle">⠿</span>
-        <div class="card-header"><span class="icon">🖥️</span> Sessions</div>
+        <div class="card-header" style="display:flex;align-items:center;justify-content:space-between"><span><span class="icon">🖥️</span> Sessions</span><span style="font-size:11px;color:var(--accent);cursor:pointer;opacity:0.7;margin-right:18px;font-weight:400" onclick="switchTab('sessions', document.querySelector('[data-tab=sessions]'))">View Details →</span></div>
         <div class="session-list" id="sessionList" style="max-height:250px;overflow:auto">
           <div class="empty-state">No items</div>
         </div>
@@ -1138,50 +1305,50 @@ body {
       </div>
       <div class="card drag-card" draggable="true" data-card-id="instructions">
         <span class="drag-handle">⠿</span>
-        <div class="card-header"><span class="icon">📋</span> Instructions</div>
+        <div class="card-header" style="display:flex;align-items:center;justify-content:space-between"><span><span class="icon">📋</span> Instructions</span><span style="font-size:11px;color:var(--accent);cursor:pointer;opacity:0.7;margin-right:18px;font-weight:400" onclick="switchTab('instructions', document.querySelector('[data-tab=instructions]'))">View Details →</span></div>
         <div id="overviewInstructions" style="max-height:200px;overflow:auto;font-size:12px;color:var(--text-secondary);padding:8px 0">
           <div class="empty-state">No items</div>
         </div>
       </div>
       <div class="card drag-card" draggable="true" data-card-id="projects">
         <span class="drag-handle">⠿</span>
-        <div class="card-header"><span class="icon">📁</span> Projects</div>
+        <div class="card-header" style="display:flex;align-items:center;justify-content:space-between"><span><span class="icon">📁</span> Projects</span><span style="font-size:11px;color:var(--accent);cursor:pointer;opacity:0.7;margin-right:18px;font-weight:400" onclick="switchTab('projects', document.querySelector('[data-tab=projects]'))">View Details →</span></div>
         <div class="list-card-items" id="overviewProjectsList" style="max-height:250px;overflow:auto">
           <div class="empty-state">No items</div>
         </div>
       </div>
       <div class="card drag-card" draggable="true" data-card-id="forks">
         <span class="drag-handle">⠿</span>
-        <div class="card-header"><span class="icon">🔀</span> Forks</div>
+        <div class="card-header" style="display:flex;align-items:center;justify-content:space-between"><span><span class="icon">🔀</span> Forks</span><span style="font-size:11px;color:var(--accent);cursor:pointer;opacity:0.7;margin-right:18px;font-weight:400" onclick="switchTab('forks', document.querySelector('[data-tab=forks]'))">View Details →</span></div>
         <div class="list-card-items" id="recentForksList" style="max-height:250px;overflow:auto">
           <div class="empty-state">No items</div>
         </div>
       </div>
       <div class="card drag-card" draggable="true" data-card-id="plugins">
         <span class="drag-handle">⠿</span>
-        <div class="card-header"><span class="icon">🔌</span> Plugins</div>
+        <div class="card-header" style="display:flex;align-items:center;justify-content:space-between"><span><span class="icon">🔌</span> Plugins</span><span style="font-size:11px;color:var(--accent);cursor:pointer;opacity:0.7;margin-right:18px;font-weight:400" onclick="switchTab('plugins', document.querySelector('[data-tab=plugins]'))">View Details →</span></div>
         <div class="list-card-items" id="overviewPluginsList" style="max-height:250px;overflow:auto">
           <div class="empty-state">No items</div>
         </div>
       </div>
       <div class="card drag-card" draggable="true" data-card-id="skills">
         <span class="drag-handle">⠿</span>
-        <div class="card-header"><span class="icon">🛠️</span> Skills</div>
+        <div class="card-header" style="display:flex;align-items:center;justify-content:space-between"><span><span class="icon">🛠️</span> Skills</span><span style="font-size:11px;color:var(--accent);cursor:pointer;opacity:0.7;margin-right:18px;font-weight:400" onclick="switchTab('skills', document.querySelector('[data-tab=skills]'))">View Details →</span></div>
         <div class="list-card-items" id="overviewSkills" style="max-height:250px;overflow:auto"></div>
       </div>
       <div class="card drag-card" draggable="true" data-card-id="agents">
         <span class="drag-handle">⠿</span>
-        <div class="card-header"><span class="icon">🤖</span> Agents</div>
+        <div class="card-header" style="display:flex;align-items:center;justify-content:space-between"><span><span class="icon">🤖</span> Agents</span><span style="font-size:11px;color:var(--accent);cursor:pointer;opacity:0.7;margin-right:18px;font-weight:400" onclick="switchTab('agents', document.querySelector('[data-tab=agents]'))">View Details →</span></div>
         <div class="list-card-items" id="overviewAgents" style="max-height:250px;overflow:auto"></div>
       </div>
       <div class="card drag-card" draggable="true" data-card-id="connectors">
         <span class="drag-handle">⠿</span>
-        <div class="card-header"><span class="icon">🔗</span> Connectors</div>
+        <div class="card-header" style="display:flex;align-items:center;justify-content:space-between"><span><span class="icon">🔗</span> Connectors</span><span style="font-size:11px;color:var(--accent);cursor:pointer;opacity:0.7;margin-right:18px;font-weight:400" onclick="switchTab('connectors', document.querySelector('[data-tab=connectors]'))">View Details →</span></div>
         <div class="list-card-items" id="overviewConnectors" style="max-height:250px;overflow:auto"></div>
       </div>
       <div class="card drag-card" draggable="true" data-card-id="hooks">
         <span class="drag-handle">⠿</span>
-        <div class="card-header"><span class="icon">🪝</span> Hooks</div>
+        <div class="card-header" style="display:flex;align-items:center;justify-content:space-between"><span><span class="icon">🪝</span> Hooks</span><span style="font-size:11px;color:var(--accent);cursor:pointer;opacity:0.7;margin-right:18px;font-weight:400" onclick="switchTab('hooks', document.querySelector('[data-tab=hooks]'))">View Details →</span></div>
         <div class="list-card-items" id="overviewHooks" style="max-height:250px;overflow:auto"></div>
       </div>
     </div>
@@ -1290,6 +1457,29 @@ body {
     </div>
   </div>
 
+  <!-- TAB: Token Usage -->
+  <div class="tab-panel" id="tab-tokens">
+    <div class="burn-period-toggle">
+      <button class="burn-period-btn active" data-period="today" onclick="switchBurnPeriod('today', this)">Today</button>
+      <button class="burn-period-btn" data-period="week" onclick="switchBurnPeriod('week', this)">7 Days</button>
+    </div>
+
+    <div class="burn-overview" id="burnOverview">
+      <div class="empty-state">No usage data</div>
+    </div>
+
+    <div class="burn-panels">
+      <div class="burn-panel" id="burnDaily"></div>
+      <div class="burn-panel" id="burnProject"></div>
+      <div class="burn-panel" id="burnActivity"></div>
+      <div class="burn-panel" id="burnModel"></div>
+      <div class="burn-panel" id="burnTools"></div>
+      <div class="burn-panel" id="burnBash"></div>
+    </div>
+
+    <div class="burn-panel" id="burnMcp" style="margin-top:8px"></div>
+  </div>
+
 </main>
 
 <script>
@@ -1305,6 +1495,11 @@ function switchTab(tabId, navEl) {
   const panel = document.getElementById('tab-' + tabId);
   if (panel) panel.classList.add('active');
   if (navEl) navEl.classList.add('active');
+
+  // Lazy-load token usage on first visit
+  if (tabId === 'tokens' && !state.tokenUsage) {
+    fetchBurnData('today');
+  }
 
   // Save current tab
   localStorage.setItem('gleaner-active-tab', tabId);
@@ -1336,6 +1531,7 @@ const state = {
   projectStatus: null,
   sessionDetail: null,
   alerts: null,
+  tokenUsage: null,
   sseConnected: false,
 };
 
@@ -2546,6 +2742,275 @@ function renderOverviewPreviews() {
   }
 }
 
+/* ============================================================
+   TOKEN USAGE (BURN) — Fetch, Switch, Render
+   ============================================================ */
+function formatTokens(n) {
+  if (n == null || isNaN(n)) return '0';
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+  return String(n);
+}
+
+function formatCost(n) {
+  if (n == null || isNaN(n)) return '$0.00';
+  return '$' + Number(n).toFixed(2);
+}
+
+async function renderBurnSummary() {
+  const el = document.getElementById('burnSummary');
+  if (!el) return;
+  try {
+    const [today, week] = await Promise.all([
+      fetchJSON('/api/token-usage?period=today'),
+      fetchJSON('/api/token-usage?period=week')
+    ]);
+    const t = today.overview;
+    const w = week.overview;
+    // Daily trend (last 7 days)
+    const daily = (week.daily || []).slice(-7);
+    const maxD = Math.max(...daily.map(d => d.costUSD), 0.01);
+    const dailyBars = daily.map(d => {
+      const pct = Math.max(Math.round((d.costUSD / maxD) * 100), 2);
+      const dt = d.date.slice(5);
+      return `<div style="display:flex;align-items:center;gap:6px;margin:2px 0">
+        <span style="font-size:10px;color:var(--text-muted);width:36px;text-align:right">${dt}</span>
+        <div style="flex:1;background:var(--bg);border-radius:2px;height:14px;overflow:hidden">
+          <div style="width:${pct}%;height:100%;background:linear-gradient(90deg,#1e3a5f,#3b82f6);border-radius:2px"></div>
+        </div>
+        <span style="font-size:10px;color:var(--accent);width:48px;text-align:right">${formatCost(d.costUSD)}</span>
+      </div>`;
+    }).join('');
+    // Models (7 days)
+    const models = (week.byModel || []).slice(0, 5);
+    const maxM = Math.max(...models.map(m => m.costUSD), 0.01);
+    const modelsHtml = models.map(m => {
+      const pct = Math.max(Math.round((m.costUSD / maxM) * 100), 2);
+      return `<div style="display:flex;align-items:center;gap:6px;margin:2px 0">
+        <span style="font-size:10px;color:var(--text-primary);width:64px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(m.name)}</span>
+        <div style="flex:1;background:var(--bg);border-radius:2px;height:12px;overflow:hidden">
+          <div style="width:${pct}%;height:100%;background:linear-gradient(90deg,#1e3a5f,#7c3aed);border-radius:2px"></div>
+        </div>
+        <span style="font-size:10px;color:var(--accent);width:48px;text-align:right">${formatCost(m.costUSD)}</span>
+      </div>`;
+    }).join('');
+    // Activities (7 days)
+    const acts = (week.byActivity || []).slice(0, 5);
+    const maxA = Math.max(...acts.map(a => a.costUSD), 0.01);
+    const actsHtml = acts.map(a => {
+      const pct = Math.max(Math.round((a.costUSD / maxA) * 100), 2);
+      const color = ACTIVITY_COLORS[a.category] || '#666';
+      return `<div style="display:flex;align-items:center;gap:6px;margin:2px 0">
+        <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${color};flex-shrink:0"></span>
+        <span style="font-size:10px;color:var(--text-primary);width:58px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(a.category)}</span>
+        <div style="flex:1;background:var(--bg);border-radius:2px;height:12px;overflow:hidden">
+          <div style="width:${pct}%;height:100%;background:${color};opacity:0.7;border-radius:2px"></div>
+        </div>
+        <span style="font-size:10px;color:var(--text-muted);width:28px;text-align:right">${a.turns}t</span>
+      </div>`;
+    }).join('');
+    el.innerHTML = `
+      <div style="display:flex;gap:16px;margin-bottom:10px">
+        <div style="flex:1">
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:2px">Today</div>
+          <span style="font-size:20px;font-weight:700;color:var(--accent)">${formatCost(t.totalCostUSD)}</span>
+          <span style="font-size:11px;color:var(--text-muted);margin-left:6px">${t.totalCalls} calls · ${t.cacheHitPct.toFixed(0)}% cache</span>
+        </div>
+        <div style="flex:1">
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:2px">7 Days</div>
+          <span style="font-size:20px;font-weight:700;color:var(--text-primary)">${formatCost(w.totalCostUSD)}</span>
+          <span style="font-size:11px;color:var(--text-muted);margin-left:6px">${w.totalCalls} calls · ${w.cacheHitPct.toFixed(0)}% cache</span>
+        </div>
+      </div>
+      <div style="margin-bottom:8px">
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">Daily Cost</div>
+        ${dailyBars}
+      </div>
+      <div style="margin-bottom:8px">
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">Models (7d)</div>
+        ${modelsHtml}
+      </div>
+      <div>
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">Activity (7d)</div>
+        ${actsHtml}
+      </div>`;
+  } catch(e) {
+    el.innerHTML = '<span style="color:var(--text-muted)">Failed to load</span>';
+  }
+}
+
+async function fetchBurnData(period) {
+  period = period || 'today';
+  try {
+    const data = await fetchJSON('/api/token-usage?period=' + period);
+    state.tokenUsage = data;
+    renderBurn();
+  } catch(e) {
+    console.error('Failed to fetch token usage:', e);
+  }
+}
+
+function switchBurnPeriod(period, btn) {
+  document.querySelectorAll('.burn-period-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  fetchBurnData(period);
+}
+
+function burnBarRows(items, opts) {
+  if (!items || items.length === 0) return '<div class="empty-state">No data</div>';
+  const nameKey = opts.nameKey || 'name';
+  const valueKey = opts.valueKey || 'value';
+  const barWidth = opts.barWidth || 80;
+  const extraCols = opts.extraCols || [];
+  const colorKey = opts.colorKey || null;
+
+  const maxVal = Math.max(...items.map(r => Number(r[valueKey]) || 0), 1);
+
+  return items.map(r => {
+    const name = r[nameKey] || '';
+    const val = Number(r[valueKey]) || 0;
+    const pct = Math.max((val / maxVal) * 100, 1);
+    const colorDot = colorKey && r[colorKey]
+      ? '<span class="burn-cat-dot" style="background:' + esc(r[colorKey]) + '"></span>'
+      : '';
+    const extras = extraCols.map(c => {
+      const v = r[c.key];
+      const formatted = c.format ? c.format(v) : esc(String(v != null ? v : ''));
+      return '<span class="burn-bar-val' + (c.primary ? ' primary' : '') + '">' + formatted + '</span>';
+    }).join('');
+
+    const barGrad = opts.barColor
+      ? 'background:linear-gradient(90deg,' + opts.barColor[0] + ',' + opts.barColor[1] + ')'
+      : '';
+    return '<div class="burn-bar-row">' +
+      colorDot +
+      '<span class="burn-bar-name" title="' + esc(name) + '">' + esc(name) + '</span>' +
+      '<div class="burn-bar" style="max-width:' + barWidth + 'px"><div class="burn-bar-fill" style="width:' + pct.toFixed(1) + '%;' + barGrad + '"></div></div>' +
+      '<div class="burn-bar-values">' + extras + '</div>' +
+      '</div>';
+  }).join('');
+}
+
+const ACTIVITY_COLORS = {
+  'Coding': '#5B9EF5', 'Debugging': '#F55B5B', 'Feature Dev': '#5BF58C',
+  'Refactoring': '#F5E05B', 'Testing': '#E05BF5', 'Exploration': '#5BF5E0',
+  'Planning': '#7B9EF5', 'Delegation': '#F5C85B', 'Git Ops': '#CCCCCC',
+  'Build/Deploy': '#5BF5A0', 'Conversation': '#888888', 'Brainstorming': '#F55BE0',
+  'General': '#666666'
+};
+
+function renderBurn() {
+  const d = state.tokenUsage;
+  const overviewEl = document.getElementById('burnOverview');
+  const dailyEl = document.getElementById('burnDaily');
+  const projectEl = document.getElementById('burnProject');
+  const activityEl = document.getElementById('burnActivity');
+  const modelEl = document.getElementById('burnModel');
+  const toolsEl = document.getElementById('burnTools');
+  const bashEl = document.getElementById('burnBash');
+  const mcpEl = document.getElementById('burnMcp');
+
+  if (!d) {
+    overviewEl.innerHTML = '<div class="empty-state">No usage data</div>';
+    [dailyEl, projectEl, activityEl, modelEl, toolsEl, bashEl, mcpEl].forEach(el => { el.innerHTML = ''; });
+    return;
+  }
+
+  // Overview
+  const ov = d.overview || {};
+  overviewEl.innerHTML =
+    '<div class="burn-overview-title">Overview</div>' +
+    '<div class="burn-stats-row">' +
+      '<div class="burn-stat"><span class="burn-stat-value accent">' + formatCost(ov.totalCostUSD) + '</span><span class="burn-stat-label">Total Cost</span></div>' +
+      '<div class="burn-stat"><span class="burn-stat-value">' + (ov.totalCalls || 0) + '</span><span class="burn-stat-label">API Calls</span></div>' +
+      '<div class="burn-stat"><span class="burn-stat-value">' + (ov.totalSessions || 0) + '</span><span class="burn-stat-label">Sessions</span></div>' +
+      '<div class="burn-stat"><span class="burn-stat-value">' + (ov.cacheHitPct != null ? ov.cacheHitPct.toFixed(1) + '%' : '--') + '</span><span class="burn-stat-label">Cache Hit</span></div>' +
+    '</div>' +
+    '<div class="burn-stats-row" style="margin-top:10px">' +
+      '<div class="burn-stat"><span class="burn-stat-value">' + formatTokens(ov.totalInputTokens) + '</span><span class="burn-stat-label">Input</span></div>' +
+      '<div class="burn-stat"><span class="burn-stat-value">' + formatTokens(ov.totalOutputTokens) + '</span><span class="burn-stat-label">Output</span></div>' +
+      '<div class="burn-stat"><span class="burn-stat-value">' + formatTokens(ov.totalCacheReadTokens) + '</span><span class="burn-stat-label">Cache Read</span></div>' +
+      '<div class="burn-stat"><span class="burn-stat-value">' + formatTokens(ov.totalCacheWriteTokens) + '</span><span class="burn-stat-label">Cache Write</span></div>' +
+    '</div>';
+
+  // Daily Activity
+  const daily = d.daily || [];
+  dailyEl.innerHTML =
+    '<div class="burn-panel-title" style="color:#14b8a6">Daily Activity</div>' +
+    '<div class="burn-panel-cols"><span>Date</span><span>Cost / Calls</span></div>' +
+    burnBarRows(
+      daily.slice().sort(function(a,b){ return (a.date||'').localeCompare(b.date||''); }),
+      { nameKey: 'date', valueKey: 'costUSD', barColor: ['#0d3d38','#14b8a6'], extraCols: [
+        { key: 'costUSD', format: function(v){ return formatCost(v); }, primary: true },
+        { key: 'calls', format: function(v){ return esc(String(v || 0)); } }
+      ]}
+    );
+
+  // By Project
+  const projects = d.byProject || [];
+  projectEl.innerHTML =
+    '<div class="burn-panel-title" style="color:#22c55e">By Project</div>' +
+    '<div class="burn-panel-cols"><span>Project</span><span>Cost / Sessions</span></div>' +
+    burnBarRows(projects, { nameKey: 'name', valueKey: 'costUSD', barColor: ['#0d3320','#22c55e'], extraCols: [
+      { key: 'costUSD', format: function(v){ return formatCost(v); }, primary: true },
+      { key: 'sessions', format: function(v){ return esc(String(v || 0)); } }
+    ]});
+
+  // By Activity
+  const activities = (d.byActivity || []).map(function(a) {
+    return Object.assign({}, a, { _color: ACTIVITY_COLORS[a.category] || ACTIVITY_COLORS.General || '#666666' });
+  });
+  activityEl.innerHTML =
+    '<div class="burn-panel-title" style="color:#f59e0b">By Activity</div>' +
+    '<div class="burn-panel-cols"><span>Category</span><span>Cost / Turns / 1-shot%</span></div>' +
+    burnBarRows(activities, { nameKey: 'category', valueKey: 'costUSD', barColor: ['#3d2e08','#f59e0b'], colorKey: '_color', extraCols: [
+      { key: 'costUSD', format: function(v){ return formatCost(v); }, primary: true },
+      { key: 'turns', format: function(v){ return esc(String(v || 0)); } },
+      { key: 'oneShotPct', format: function(v){ return v != null ? v.toFixed(0) + '%' : '--'; } }
+    ]});
+
+  // By Model
+  const models = d.byModel || [];
+  modelEl.innerHTML =
+    '<div class="burn-panel-title" style="color:#a855f7">By Model</div>' +
+    '<div class="burn-panel-cols"><span>Model</span><span>Cost / Calls</span></div>' +
+    burnBarRows(models, { nameKey: 'name', valueKey: 'costUSD', barColor: ['#2e1065','#a855f7'], extraCols: [
+      { key: 'costUSD', format: function(v){ return formatCost(v); }, primary: true },
+      { key: 'calls', format: function(v){ return esc(String(v || 0)); } }
+    ]});
+
+  // Core Tools
+  var tools = (d.coreTools || []).slice(0, 10);
+  toolsEl.innerHTML =
+    '<div class="burn-panel-title" style="color:#06b6d4">Core Tools</div>' +
+    '<div class="burn-panel-cols"><span>Tool</span><span>Calls</span></div>' +
+    burnBarRows(tools, { nameKey: 'name', valueKey: 'calls', barColor: ['#083344','#06b6d4'], extraCols: [
+      { key: 'calls', format: function(v){ return esc(String(v || 0)); }, primary: true }
+    ]});
+
+  // Shell Commands
+  var bash = (d.shellCommands || []).slice(0, 10);
+  bashEl.innerHTML =
+    '<div class="burn-panel-title" style="color:#f97316">Shell Commands</div>' +
+    '<div class="burn-panel-cols"><span>Command</span><span>Calls</span></div>' +
+    burnBarRows(bash, { nameKey: 'name', valueKey: 'calls', barColor: ['#431407','#f97316'], extraCols: [
+      { key: 'calls', format: function(v){ return esc(String(v || 0)); }, primary: true }
+    ]});
+
+  // MCP Servers
+  var mcp = d.mcpServers || [];
+  if (mcp.length > 0) {
+    mcpEl.innerHTML =
+      '<div class="burn-panel-title" style="color:#ec4899">MCP Servers</div>' +
+      '<div class="burn-panel-cols"><span>Server</span><span>Calls</span></div>' +
+      burnBarRows(mcp, { nameKey: 'name', valueKey: 'calls', barWidth: 200, barColor: ['#4a0d2e','#ec4899'], extraCols: [
+        { key: 'calls', format: function(v){ return esc(String(v || 0)); }, primary: true }
+      ]});
+  } else {
+    mcpEl.innerHTML = '';
+  }
+}
+
 function renderAll() {
   renderSummary();
   renderAlerts();
@@ -2562,6 +3027,7 @@ function renderAll() {
   renderProjectStatus();
   renderSessionMonitor();
   renderOverviewPreviews();
+  if (state.tokenUsage) renderBurn();
   updateTimestamp();
 }
 
@@ -2613,6 +3079,7 @@ async function loadAll() {
   if (alerts)          state.alerts = alerts;
 
   renderAll();
+  renderBurnSummary();
 }
 
 /* ============================================================
