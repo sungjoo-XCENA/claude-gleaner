@@ -2491,6 +2491,7 @@ function renderSessionMonitor() {
               <span style="font-size:14px;font-weight:600;color:var(--text-primary)">${esc(name)}</span>
               <span class="badge green" style="font-size:10px">active</span>
               ${s.is_docker ? '<span class="badge" style="font-size:10px;background:#854d0e;color:#fbbf24">🐳 Docker</span>' : ''}
+              ${s.is_docker ? '' : `<span class="badge" style="font-size:10px;margin-left:auto;cursor:pointer;background:rgba(59,130,246,0.2);color:var(--accent)" onclick="event.stopPropagation();openTransferModal('${esc(s.session_id)}', '${esc(s.project || '')}', '${esc(name)}')" title="Transfer this session to another server">📤 Transfer</span>`}
             </div>
             <div style="font-size:12px;color:var(--text-secondary);margin-top:6px">
               CWD: <span style="font-family:var(--font-mono);font-size:11px">${esc(s.project || '')}</span>
@@ -2517,7 +2518,7 @@ function renderSessionMonitor() {
         const preview = s.first_message || '';
         const cwd = s.project || '';
         const dockerName = s.is_docker ? (s.project_name || '') : '';
-        const baseCmd = 'claude --resume --session-id ' + s.session_id;
+        const baseCmd = 'claude --resume ' + s.session_id;
         const resumeCmd = dockerName
           ? 'docker exec -it ' + dockerName + ' ' + baseCmd
           : (cwd ? 'cd ' + cwd + ' && ' + baseCmd : baseCmd);
@@ -3180,6 +3181,194 @@ async function deleteSession(sessionId) {
   const data = await res.json();
   if (data.ok) loadAll();
   else alert('Error: ' + (data.error || 'unknown'));
+}
+
+/* ============================================================
+   SESSION TRANSFER — modal, submit, result
+   ============================================================ */
+function openTransferModal(sessionId, sourcePath, displayName) {
+  const existing = document.getElementById('transferModalOverlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'transferModalOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px';
+  overlay.onclick = function(e) { if (e.target === overlay) closeTransferModal(); };
+  overlay.onkeydown = function(e) { if (e.key === 'Escape') closeTransferModal(); };
+
+  const modal = document.createElement('div');
+  modal.style.cssText = 'background:var(--bg-card,#18181b);border:1px solid var(--border);border-radius:12px;padding:20px;width:min(560px,100%);max-height:90vh;overflow:auto;color:var(--text-primary);box-shadow:0 20px 40px rgba(0,0,0,0.5)';
+  modal.innerHTML = `
+    <div style="font-size:16px;font-weight:600;margin-bottom:12px">📤 Transfer Session</div>
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">Session: <strong style="color:var(--text-primary)">${esc(displayName || '--')}</strong></div>
+    <div style="font-size:10px;color:var(--text-muted);margin-bottom:6px;font-family:var(--font-mono,monospace);opacity:0.7">${esc(sessionId)}</div>
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:14px">Source: <span style="font-family:var(--font-mono,monospace);color:var(--text-secondary)">${esc(sourcePath || '--')}</span></div>
+
+    <div style="background:rgba(245,158,11,0.1);border-left:3px solid #f59e0b;padding:10px;border-radius:6px;margin-bottom:14px;font-size:12px;color:var(--text-secondary);line-height:1.5">
+      ⚠ Live 세션입니다. 전송 중 발생하는 새 메시지는 복사본에 포함되지 않을 수 있어요.
+      안전하게 옮기려면 이 세션을 먼저 종료하고 Transfer를 누르세요.
+    </div>
+
+    <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px">Target host</label>
+    <input id="transferHost" type="text" placeholder="user@server  또는  ssh alias" autocomplete="off" spellcheck="false"
+      style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text-primary);font-size:13px;margin-bottom:4px;font-family:var(--font-mono,monospace);box-sizing:border-box" />
+    <div style="font-size:11px;color:var(--text-muted);margin-bottom:12px">SSH 키가 설정돼 있어야 합니다 (BatchMode). 포트 지정은 <code style="background:var(--border);padding:1px 4px;border-radius:3px">user@host:port</code>.</div>
+
+    <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px">Target project path <span style="font-weight:400;color:var(--text-muted)">(optional)</span></label>
+    <input id="transferTargetPath" type="text" placeholder="${esc(sourcePath || '/home/user/repo')}" autocomplete="off" spellcheck="false"
+      style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text-primary);font-size:13px;margin-bottom:4px;font-family:var(--font-mono,monospace);box-sizing:border-box" />
+    <div style="font-size:11px;color:var(--text-muted);margin-bottom:14px">비워두면 소스와 같은 경로. 대상 서버에 그 경로가 없으면 자동으로 <code style="background:var(--border);padding:1px 4px;border-radius:3px">mkdir -p</code>로 만들어집니다. 빈 디렉토리라도 resume은 됩니다 — 대화 context는 세션 파일에 담겨 있어요.</div>
+
+    <div id="transferStatus" style="margin-bottom:10px"></div>
+
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button id="transferCancelBtn" onclick="closeTransferModal()" style="padding:8px 14px;background:transparent;border:1px solid var(--border);border-radius:6px;color:var(--text-primary);cursor:pointer;font-size:13px">Cancel</button>
+      <button id="transferSubmitBtn" onclick="submitTransfer('${esc(sessionId)}')" style="padding:8px 14px;background:var(--accent);border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:13px;font-weight:600">📤 Transfer</button>
+    </div>
+  `;
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+  const hostInput = document.getElementById('transferHost');
+  if (hostInput) hostInput.focus();
+  document.addEventListener('keydown', _transferEscHandler);
+}
+
+
+function _transferEscHandler(e) {
+  if (e.key === 'Escape') closeTransferModal();
+}
+
+function closeTransferModal() {
+  const el = document.getElementById('transferModalOverlay');
+  if (el) el.remove();
+  document.removeEventListener('keydown', _transferEscHandler);
+}
+
+async function submitTransfer(sessionId) {
+  const hostEl = document.getElementById('transferHost');
+  const pathEl = document.getElementById('transferTargetPath');
+  const statusEl = document.getElementById('transferStatus');
+  const submitBtn = document.getElementById('transferSubmitBtn');
+  const cancelBtn = document.getElementById('transferCancelBtn');
+  if (!hostEl || !statusEl || !submitBtn) return;
+
+  const host = (hostEl.value || '').trim();
+  const targetPath = (pathEl.value || '').trim();
+
+  if (!host) {
+    statusEl.innerHTML = '<div style="color:var(--red);font-size:12px">Target host는 필수입니다.</div>';
+    hostEl.focus();
+    return;
+  }
+
+  // Inline password (only present if we're retrying after auth_required)
+  const pwEl = document.getElementById('transferPassword');
+  let password = pwEl ? pwEl.value : '';
+
+  const doingSetup = !!password;
+  statusEl.innerHTML = doingSetup
+    ? '<div style="color:var(--text-muted);font-size:12px">⟳ ssh-copy-id로 키 등록 중 → scp 진행 예정...</div>'
+    : '<div style="color:var(--text-muted);font-size:12px">⟳ ssh / scp 실행 중... (몇 초 걸릴 수 있어요)</div>';
+  submitBtn.disabled = true;
+  submitBtn.style.opacity = '0.6';
+  submitBtn.style.cursor = 'wait';
+
+  const reqBody = {host: host, target_project_path: targetPath || undefined};
+  if (password) reqBody.password = password;
+  // Wipe password from the input field immediately (still held in `password` local var for the fetch)
+  if (pwEl) pwEl.value = '';
+
+  try {
+    const res = await fetch('/api/transfer-session?id=' + encodeURIComponent(sessionId), {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(reqBody),
+    });
+    // Scrub the password from memory after the fetch is dispatched
+    password = '';
+    reqBody.password = '';
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      const msg = (data && data.error) || ('HTTP ' + res.status);
+
+      // Structured auth error → show inline password prompt (one-click setup)
+      if (data && data.code === 'auth_required' && data.can_setup) {
+        statusEl.innerHTML = `
+          <div style="background:rgba(239,68,68,0.1);border-left:3px solid var(--red);padding:10px;border-radius:6px;font-size:12px;color:#fca5a5;word-break:break-word;white-space:pre-wrap;font-family:var(--font-mono,monospace);margin-bottom:10px">✗ ${esc(msg)}</div>
+          <div style="background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.3);border-radius:6px;padding:12px">
+            <div style="font-size:12px;font-weight:600;color:var(--text-primary);margin-bottom:4px">🔑 One-click 세팅</div>
+            <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px">
+              대상 서버 <strong style="color:var(--text-secondary)">${esc(host)}</strong>의 비밀번호를 한 번 입력하면
+              공개키를 자동 등록한 뒤 전송까지 진행합니다. 비번은 메모리에서만 쓰이고 저장/로깅하지 않습니다.
+            </div>
+            <input id="transferPassword" type="password" autocomplete="current-password" placeholder="password for ${esc(host)}"
+              style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text-primary);font-size:13px;margin-bottom:8px;box-sizing:border-box;font-family:var(--font-mono,monospace)" />
+            <button onclick="submitTransfer('${esc(sessionId)}')" style="width:100%;padding:8px 14px;background:var(--accent);border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:13px;font-weight:600">🔑 Setup key & Transfer</button>
+            <div style="font-size:10px;color:var(--text-muted);margin-top:6px;opacity:0.7">
+              또는 아래 🔑 SSH 설정 도우미를 펼쳐서 직접 복사/붙여넣기로 설정할 수도 있습니다.
+            </div>
+          </div>`;
+        submitBtn.style.display = 'none';
+        const pwNew = document.getElementById('transferPassword');
+        if (pwNew) {
+          pwNew.focus();
+          pwNew.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              submitTransfer(sessionId);
+            }
+          });
+        }
+        return;
+      }
+
+      // Build hint based on structured error code
+      let hint = '';
+      if (data && data.code === 'sshpass_missing') {
+        hint = `
+          <div style="background:rgba(59,130,246,0.1);border:1px solid rgba(59,130,246,0.3);border-radius:6px;padding:10px;margin-top:8px;font-size:12px;color:var(--text-secondary);line-height:1.6">
+            <div style="font-weight:600;color:var(--text-primary);margin-bottom:4px">📦 sshpass 필요</div>
+            이 서버에서 <code style="background:var(--border);padding:1px 4px;border-radius:3px">sudo apt install sshpass</code> (또는 배포판에 맞게) 한 번 설치한 뒤 다시 Transfer를 눌러주세요.
+            sshpass는 ssh 비번을 프로그램이 전달하게 해주는 작은 유틸입니다. One-click 세팅에만 쓰입니다.
+          </div>`;
+      } else if (data && data.code === 'setup_failed') {
+        hint = `
+          <div style="background:rgba(245,158,11,0.1);border-left:3px solid #f59e0b;padding:10px;margin-top:8px;font-size:12px;color:var(--text-secondary);line-height:1.6">
+            <div style="font-weight:600;color:var(--text-primary);margin-bottom:4px">체크할 것</div>
+            <ul style="margin:4px 0 0 18px;padding:0">
+              <li>비번이 정확한지 (오타, 다른 계정 비번 혼동)</li>
+              <li>대상 서버가 PasswordAuthentication을 허용하는지 (<code style="background:var(--border);padding:1px 3px;border-radius:3px">/etc/ssh/sshd_config</code>)</li>
+              <li>그 서버 관리자가 키 등록 방식만 허용하는 경우, 관리자에게 공개키 등록 요청</li>
+            </ul>
+          </div>`;
+      }
+      statusEl.innerHTML = `<div style="background:rgba(239,68,68,0.1);border-left:3px solid var(--red);padding:10px;border-radius:6px;font-size:12px;color:#fca5a5;word-break:break-word;white-space:pre-wrap;font-family:var(--font-mono,monospace)">✗ ${esc(msg)}</div>${hint}`;
+      submitBtn.disabled = false;
+      submitBtn.style.opacity = '1';
+      submitBtn.style.cursor = 'pointer';
+      return;
+    }
+
+    const resume = data.resume_cmd || '';
+    const subagentNote = data.subagent && data.subagent.ok
+      ? ' (subagent sessions included)'
+      : (data.subagent && !data.subagent.ok ? ' (subagent dir failed to transfer)' : '');
+    statusEl.innerHTML = `
+      <div style="background:rgba(34,197,94,0.1);border-left:3px solid var(--green);padding:10px;border-radius:6px;font-size:12px;color:#86efac;margin-bottom:10px">
+        ✓ Transferred to <strong>${esc(data.target_host || '')}</strong>${esc(subagentNote)}
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">대상 서버에서 실행하세요:</div>
+      <pre id="transferResumeBox" style="padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;font-family:var(--font-mono,monospace);font-size:12px;color:var(--text-primary);white-space:pre-wrap;word-break:break-all;margin:0">${esc(resume)}</pre>
+      <button onclick="copyFork(this,'${esc(resume)}')" style="margin-top:8px;padding:6px 12px;background:transparent;border:1px solid var(--border);border-radius:6px;color:var(--text-primary);cursor:pointer;font-size:12px">📋 Copy command</button>
+    `;
+    submitBtn.style.display = 'none';
+    if (cancelBtn) cancelBtn.textContent = 'Close';
+  } catch (err) {
+    statusEl.innerHTML = `<div style="color:var(--red);font-size:12px">✗ ${esc(err.message || String(err))}</div>`;
+    submitBtn.disabled = false;
+    submitBtn.style.opacity = '1';
+    submitBtn.style.cursor = 'pointer';
+  }
 }
 
 function copyFork(el, cmd) {

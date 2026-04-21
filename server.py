@@ -238,6 +238,32 @@ def parse_frontmatter(text: str) -> dict:
     return result
 
 
+def encode_project_path(abs_path: str) -> str:
+    """Inverse of decode_project_path: '/home/sungjoo/repo' → '-home-sungjoo-repo'."""
+    if not abs_path.startswith("/"):
+        raise ValueError("project path must be absolute")
+    return "-" + abs_path.strip("/").replace("/", "-")
+
+
+_HOST_RE = re.compile(r"^(?:[A-Za-z0-9_.\-]+@)?[A-Za-z0-9_.\-]+(?::\d{1,5})?$")
+_PROJECT_PATH_RE = re.compile(r"^/[A-Za-z0-9_.\-/]+$")
+
+
+def _is_valid_ssh_host(host: str) -> bool:
+    """Accept forms: host, user@host, host:port, user@host:port."""
+    return bool(host) and len(host) <= 256 and bool(_HOST_RE.match(host))
+
+
+def _is_valid_project_path(path: str) -> bool:
+    if not path or len(path) > 512:
+        return False
+    if not path.startswith("/"):
+        return False
+    if ".." in path.split("/"):
+        return False
+    return bool(_PROJECT_PATH_RE.match(path))
+
+
 def decode_project_path(folder_name: str) -> str:
     """Convert a project folder name to its actual path. '-home-sungjoo-repo' → '/home/sungjoo/repo'
 
@@ -2866,10 +2892,173 @@ class GleanerHandler(BaseHTTPRequestHandler):
         # Serve static files
         self._serve_static(path)
 
+    def _read_json_body(self) -> tuple[Optional[dict], Optional[str]]:
+        """Read POST request body and decode as JSON. Returns (data, error_message)."""
+        try:
+            content_length = int(self.headers.get("Content-Length", "0") or "0")
+        except ValueError:
+            return None, "invalid Content-Length"
+        if content_length <= 0:
+            return {}, None
+        if content_length > 1_000_000:
+            return None, "body too large"
+        try:
+            raw = self.rfile.read(content_length)
+            return json.loads(raw.decode("utf-8")), None
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            return None, f"invalid JSON body: {e}"
+
     def do_POST(self):
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/") or "/"
         query_params = parse_qs(parsed.query)
+
+        if path == "/api/transfer-session":
+            session_id = query_params.get("id", [""])[0]
+            if not session_id or ".." in session_id or "/" in session_id:
+                self._json_response({"error": "id parameter required"}, 400)
+                return
+
+            body, err = self._read_json_body()
+            if err is not None:
+                self._json_response({"error": err}, 400)
+                return
+
+            host = (body.get("host") or "").strip()
+            if not _is_valid_ssh_host(host):
+                self._json_response({"error": "invalid host (expected [user@]hostname[:port])"}, 400)
+                return
+
+            target_path_override = (body.get("target_project_path") or "").strip()
+            password = body.get("password")  # optional; used only for one-shot ssh-copy-id
+            if password is not None and not isinstance(password, str):
+                self._json_response({"error": "password must be a string"}, 400)
+                return
+
+            # Locate source JSONL (and optional subagent dir)
+            projects_dir = CLAUDE_DIR / "projects"
+            source_jsonl: Optional[Path] = None
+            source_proj_dir: Optional[Path] = None
+            if projects_dir.is_dir():
+                for jsonl_file in projects_dir.rglob(f"{session_id}.jsonl"):
+                    source_jsonl = jsonl_file
+                    source_proj_dir = jsonl_file.parent
+                    break
+            if not source_jsonl or not source_proj_dir:
+                self._json_response({"error": f"session {session_id} not found"}, 404)
+                return
+
+            source_folder = source_proj_dir.name
+            source_decoded = decode_project_path(source_folder)
+            source_subagent_dir = source_proj_dir / session_id  # may not exist
+
+            # Determine target project folder (encoded) and target decoded path (for resume cmd)
+            if target_path_override:
+                if not _is_valid_project_path(target_path_override):
+                    self._json_response({"error": "invalid target_project_path (must be absolute, no shell metachars)"}, 400)
+                    return
+                target_folder = encode_project_path(target_path_override)
+                target_decoded = target_path_override
+            else:
+                target_folder = source_folder
+                target_decoded = source_decoded
+
+            remote_dir = f".claude/projects/{target_folder}"
+
+            ssh_opts = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=accept-new"]
+            # mkdir both: (1) session storage dir under ~/.claude/projects, (2) target project dir for cd
+            ssh_mkdir = ["ssh", *ssh_opts, host,
+                         f"mkdir -p {remote_dir} && mkdir -p {target_decoded}"]
+            scp_jsonl = ["scp", *ssh_opts, str(source_jsonl), f"{host}:{remote_dir}/"]
+            scp_subagent = None
+            if source_subagent_dir.is_dir():
+                scp_subagent = ["scp", *ssh_opts, "-r", str(source_subagent_dir), f"{host}:{remote_dir}/"]
+
+            resume_cmd = f"cd {target_decoded} && claude --resume {session_id}"
+
+            def _is_auth_error(text: str) -> bool:
+                t = (text or "").lower()
+                return ("permission denied" in t) or ("publickey" in t and "password" in t)
+
+            sshpass_path = shutil.which("sshpass")
+
+            try:
+                r1 = subprocess.run(ssh_mkdir, capture_output=True, text=True, timeout=30)
+                if r1.returncode != 0:
+                    msg = (r1.stderr or r1.stdout or "").strip() or f"exit {r1.returncode}"
+                    if _is_auth_error(msg):
+                        if not password:
+                            # Ask frontend to prompt for a one-shot password
+                            self._json_response({
+                                "error": msg,
+                                "code": "auth_required",
+                                "can_setup": sshpass_path is not None,
+                            }, 401)
+                            return
+                        if not sshpass_path:
+                            self._json_response({
+                                "error": "sshpass is not installed on this server, cannot auto-register key",
+                                "code": "sshpass_missing",
+                            }, 500)
+                            return
+                        # One-shot ssh-copy-id using SSHPASS env var (not argv → invisible to `ps`)
+                        copyid_cmd = [sshpass_path, "-e", "ssh-copy-id",
+                                      "-o", "StrictHostKeyChecking=accept-new",
+                                      "-o", "ConnectTimeout=10", host]
+                        copyid_env = {**os.environ, "SSHPASS": password}
+                        try:
+                            rc = subprocess.run(copyid_cmd, capture_output=True, text=True,
+                                                timeout=60, env=copyid_env)
+                        finally:
+                            # Wipe sensitive data from the local dict ASAP
+                            copyid_env["SSHPASS"] = ""
+                            password = ""
+                            body["password"] = ""
+                        if rc.returncode != 0:
+                            err = (rc.stderr or rc.stdout or "").strip() or f"exit {rc.returncode}"
+                            # Clean stderr noise — strip duplicate "Permission denied" lines
+                            err = "\n".join([ln for ln in err.splitlines() if ln.strip()])
+                            self._json_response({
+                                "error": f"ssh-copy-id failed: {err}",
+                                "code": "setup_failed",
+                            }, 500)
+                            return
+                        # Key registered — retry the original mkdir
+                        r1 = subprocess.run(ssh_mkdir, capture_output=True, text=True, timeout=30)
+                        if r1.returncode != 0:
+                            msg = (r1.stderr or r1.stdout or "").strip() or f"exit {r1.returncode}"
+                            self._json_response({"error": f"ssh mkdir failed after key setup: {msg}"}, 500)
+                            return
+                    else:
+                        self._json_response({"error": f"ssh mkdir failed: {msg}"}, 500)
+                        return
+                r2 = subprocess.run(scp_jsonl, capture_output=True, text=True, timeout=300)
+                if r2.returncode != 0:
+                    msg = (r2.stderr or r2.stdout or "").strip() or f"exit {r2.returncode}"
+                    self._json_response({"error": f"scp session file failed: {msg}"}, 500)
+                    return
+                subagent_result = None
+                if scp_subagent is not None:
+                    r3 = subprocess.run(scp_subagent, capture_output=True, text=True, timeout=600)
+                    subagent_result = {
+                        "ok": r3.returncode == 0,
+                        "error": (r3.stderr or "").strip() if r3.returncode != 0 else None,
+                    }
+                self._json_response({
+                    "ok": True,
+                    "transferred": str(source_jsonl.relative_to(CLAUDE_DIR)),
+                    "subagent": subagent_result,
+                    "target_host": host,
+                    "target_project": target_decoded,
+                    "resume_cmd": resume_cmd,
+                })
+            except subprocess.TimeoutExpired:
+                self._json_response({"error": "ssh/scp timed out"}, 504)
+            except FileNotFoundError:
+                self._json_response({"error": "ssh or scp not found on this machine"}, 500)
+            except Exception as e:
+                self._json_response({"error": str(e)}, 500)
+            return
 
         if path == "/api/delete-project":
             dir_name = query_params.get("dir", [""])[0]
@@ -2881,7 +3070,6 @@ class GleanerHandler(BaseHTTPRequestHandler):
             if not target.is_dir() or ".." in dir_name:
                 self._json_response({"error": "invalid project directory"}, 400)
                 return
-            import shutil
             try:
                 shutil.rmtree(target)
                 self._json_response({"ok": True, "deleted": dir_name})
@@ -2890,7 +3078,6 @@ class GleanerHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/delete-skill":
-            import shutil
             skill_name = query_params.get("name", [""])[0]
             if not skill_name or ".." in skill_name:
                 self._json_response({"error": "name parameter required"}, 400)
@@ -2974,7 +3161,6 @@ class GleanerHandler(BaseHTTPRequestHandler):
             return
 
         if path in ("/api/delete-session", "/api/delete-fork"):
-            import shutil
             session_id = query_params.get("id", [""])[0]
             if not session_id or ".." in session_id or "/" in session_id:
                 self._json_response({"error": "id parameter required"}, 400)
