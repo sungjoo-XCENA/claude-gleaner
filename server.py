@@ -424,29 +424,31 @@ def get_sessions() -> dict:
                 "cwd": "",
             })
     else:
-        # Linux / macOS: use ps aux
-        try:
-            user = os.environ.get("USER", os.getlogin())
-        except OSError:
-            user = "unknown"
+        # Linux / macOS: use `ps -eo uid=,...` with explicit no-header format.
+        # NOTE: `ps aux`'s USER column truncates to 8 chars for long usernames,
+        # which silently breaks string-based user matching. Use numeric UID instead.
+        my_uid = os.getuid()
 
         try:
             result = subprocess.run(
-                ["ps", "aux"],
+                ["ps", "-eo", "uid=,pid=,pcpu=,pmem=,vsz=,rss=,tty=,stat=,start_time=,time=,command="],
                 capture_output=True, text=True, timeout=5,
                 env={**os.environ, "LC_ALL": "C"}
             )
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return {"sessions": sessions}
 
-        # ps aux header: USER PID %CPU %MEM VSZ RSS TTY STAT START TIME COMMAND
-        for line in result.stdout.splitlines()[1:]:
+        # Format: uid pid %cpu %mem vsz rss tty stat start time command
+        for line in result.stdout.splitlines():
             parts = line.split(None, 10)
             if len(parts) < 11:
                 continue
-            ps_user, pid_str, _cpu, _mem, _vsz, _rss, tty, stat, start, time_field, command = parts[0], parts[1], parts[2], parts[3], parts[4], parts[5], parts[6], parts[7], parts[8], parts[9], parts[10]
+            uid_str, pid_str, _cpu, _mem, _vsz, _rss, tty, stat, start, time_field, command = parts[0], parts[1], parts[2], parts[3], parts[4], parts[5], parts[6], parts[7], parts[8], parts[9], parts[10]
 
-            if ps_user != user:
+            try:
+                if int(uid_str) != my_uid:
+                    continue
+            except ValueError:
                 continue
 
             # Filter to claude processes only (claude binary or node claude)
